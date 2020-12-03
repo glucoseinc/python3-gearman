@@ -101,6 +101,53 @@ GEARMAN_PARAMS_FOR_COMMAND = {
     GEARMAN_COMMAND_TEXT_COMMAND: ['raw_text']
 }
 
+#Command binary type param
+GEARMAN_COMMAND_BIN_PARAMS = {
+    # Gearman commands 1-9
+    GEARMAN_COMMAND_CAN_DO: [],
+    GEARMAN_COMMAND_CANT_DO: [],
+    GEARMAN_COMMAND_RESET_ABILITIES: [],
+    GEARMAN_COMMAND_PRE_SLEEP: [],
+    GEARMAN_COMMAND_NOOP: [],
+    GEARMAN_COMMAND_SUBMIT_JOB: ['data'],
+    GEARMAN_COMMAND_JOB_CREATED: [],
+    GEARMAN_COMMAND_GRAB_JOB: [],
+
+    # Gearman commands 10-19
+    GEARMAN_COMMAND_NO_JOB: [],
+    GEARMAN_COMMAND_JOB_ASSIGN: ['data'],
+    GEARMAN_COMMAND_WORK_STATUS: [],
+    GEARMAN_COMMAND_WORK_COMPLETE: ['data'],
+    GEARMAN_COMMAND_WORK_FAIL: [],
+    GEARMAN_COMMAND_GET_STATUS: [],
+    GEARMAN_COMMAND_ECHO_REQ: ['data'],
+    GEARMAN_COMMAND_ECHO_RES: ['data'],
+    GEARMAN_COMMAND_SUBMIT_JOB_BG: ['data'],
+    GEARMAN_COMMAND_ERROR: [],
+
+    # Gearman commands 20-29
+    GEARMAN_COMMAND_STATUS_RES: [],
+    GEARMAN_COMMAND_SUBMIT_JOB_HIGH: ['data'],
+    # GEARMAN_COMMAND_SET_CLIENT_ID: ['client_id'],
+    # GEARMAN_COMMAND_CAN_DO_TIMEOUT: ['timeout'],
+    GEARMAN_COMMAND_ALL_YOURS: [],
+    GEARMAN_COMMAND_WORK_EXCEPTION: ['data'],
+    # GEARMAN_COMMAND_OPTION_REQ: ['option_name'],
+    # GEARMAN_COMMAND_OPTION_RES: ['option_name'],
+    GEARMAN_COMMAND_WORK_DATA: ['data'],
+    GEARMAN_COMMAND_WORK_WARNING: ['data'],
+
+    # Gearman commands 30-39
+    GEARMAN_COMMAND_GRAB_JOB_UNIQ: [],
+    GEARMAN_COMMAND_JOB_ASSIGN_UNIQ: ['data'],
+    GEARMAN_COMMAND_SUBMIT_JOB_HIGH_BG: ['data'],
+    GEARMAN_COMMAND_SUBMIT_JOB_LOW: ['data'],
+    GEARMAN_COMMAND_SUBMIT_JOB_LOW_BG: ['data'],
+
+    # Fake gearman command
+    GEARMAN_COMMAND_TEXT_COMMAND: []
+}
+
 GEARMAN_COMMAND_TO_NAME = {
     GEARMAN_COMMAND_CAN_DO: 'GEARMAN_COMMAND_CAN_DO',
     GEARMAN_COMMAND_CANT_DO: 'GEARMAN_COMMAND_CANT_DO',
@@ -210,12 +257,11 @@ def parse_binary_command(in_buffer, is_response=True):
         return None, None, 0
 
     binary_payload = in_buffer[COMMAND_HEADER_SIZE:expected_packet_size]
-    binary_payload = binary_payload.decode('utf-8')
     split_arguments = []
 
     if len(expected_cmd_params) > 0:
         split_arguments = binary_payload.split(
-            NULL_CHAR, len(expected_cmd_params) - 1)
+            NULL_CHAR.encode(), len(expected_cmd_params) - 1)
     elif binary_payload:
         raise ProtocolError(
             'Expected no binary payload: %s' %
@@ -232,9 +278,20 @@ def parse_binary_command(in_buffer, is_response=True):
             )
         )
 
+    try:
+        command_bin_params = GEARMAN_COMMAND_BIN_PARAMS[cmd_type]
+    except:
+        raise NotImplementedError(f'Not define command "{cmd_type}" in GEARMAN_COMMAND_BIN_PARAMS. params is : {split_arguments}')
+
+    def decode_if_need(param_label, param_value):
+        if param_label in command_bin_params:
+            return param_label, param_value
+        
+        return param_label, param_value.decode()
+
     # Iterate through the split arguments and assign them labels based on
     # their order
-    cmd_args = dict((param_label, param_value) for param_label,
+    cmd_args = dict(decode_if_need(param_label, param_value) for param_label,
                     param_value in zip(expected_cmd_params, split_arguments))
     return cmd_type, cmd_args, expected_packet_size
 
@@ -265,12 +322,16 @@ def pack_binary_command(cmd_type, cmd_args, is_response=False):
 
     # !NOTE! str should be replaced with bytes in Python 3.x
     # We will iterate in ORDER and str all our command arguments
-    if compat.any(not isinstance(param_value, str)
-                  for param_value in cmd_args.values()):
-        raise ProtocolError('Received non-binary arguments: %r' % cmd_args)
+    for param_name, param_value in cmd_args.items():
+        command_bin_params = GEARMAN_COMMAND_BIN_PARAMS[cmd_type]
+        if not isinstance(param_value, bytes) and not (param_name in command_bin_params):
+            if isinstance(param_value, str):
+                cmd_args[param_name] = param_value.encode()
+            else:
+                raise ProtocolError('Received non-binary arguments: %r' % cmd_args)
 
     data_items = [cmd_args[param] for param in expected_cmd_params]
-    binary_payload = NULL_CHAR.join(data_items)
+    binary_payload = NULL_CHAR.encode().join(data_items)
 
     # Pack the header in the !4sII format then append the binary payload
     payload_size = len(binary_payload)
@@ -280,7 +341,7 @@ def pack_binary_command(cmd_type, cmd_args, is_response=False):
         magic.encode(),
         cmd_type,
         payload_size,
-        binary_payload.encode())
+        binary_payload)
 
 
 def parse_text_command(in_buffer):
